@@ -3,6 +3,8 @@
 
 ## Sample FIBO Outputs
 
+Try it at https://fibox3dstudio.pages.dev/
+
 ![](https://imgur.com/2W9Supk)
 
 ## Inspiration
