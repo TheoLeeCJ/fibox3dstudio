@@ -26,7 +26,7 @@ let jsonEditorInstance = null
 
 // Tutorial video dialog
 const showTutorialDialog = ref(false)
-const tutorialVideoUrl = 'https://www.youtube.com/embed/dQw4w9WgXcQ' // Replace with actual tutorial video ID
+const tutorialVideoUrl = 'https://www.youtube.com/embed/tTuT6ZODGsA' // Replace with actual tutorial video ID
 
 const handleAcceptPending = () => {
   // Get description from window (set by ChatPanel or ObjectsPanel)
