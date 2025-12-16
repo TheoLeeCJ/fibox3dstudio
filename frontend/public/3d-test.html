@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>3D Bounding Box Test</title>
+    <style>
+        html, body {
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+        #ui-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 300px;
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: sans-serif;
+            max-height: 90vh;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 10;
+        }
+        textarea {
+            width: 100%;
+            height: 150px;
+            resize: vertical;
+            font-family: monospace;
+            font-size: 11px;
+        }
+        .control-group {
+            border: 1px solid #ccc;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        .control-group h4 {
+            margin: 0 0 5px 0;
+        }
+        .input-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            flex-wrap: wrap;
+        }
+        .input-row label {
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            margin-right: 5px;
+        }
+        .input-row input {
+            width: 50px;
+            margin-left: 2px;
+        }
+        button {
+            padding: 8px;
+            cursor: pointer;
+            width: 100%;
+        }
+    </style>
+    <script src="babylon/babylon.js"></script>
+    <script src="babylon/babylon.glTFFileLoader.min.js"></script>
+    <script src="babylon/babylon.inspector.bundle.js"></script>
+    <script src="babylon/dat.gui.min.js"></script>
+</head>
+<body>
+    <div id="ui-panel">
+        <h3>Configuration</h3>
+        
+        <div class="control-group">
+            <h4>Bounding Box Settings</h4>
+            <div class="input-row">
+                <label>Y Level: <input type="number" id="bbox-platform-y" value="-1.5" step="0.1"></label>
+                <label>Size: <input type="number" id="bbox-world-size" value="5.8" step="0.1"></label>
+            </div>
+            <div class="input-row">
+                <label><input type="checkbox" id="bbox-show-debug" checked> Show Debug Boxes</label>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h4>GLB Placement Settings</h4>
+            <div class="input-row">
+                <label>Scale Multiplier: <input type="number" id="glb-scale-mult" value="1.1" step="0.01"></label>
+                <label>Y Offset: <input type="number" id="glb-y-offset" value="0" step="0.1"></label>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h4>Bounding Box Data</h4>
+            <textarea id="bbox-input" placeholder="Paste JSON here...">{
+  "Room Structure": {
+    "bounding_boxes": [
+      [0, 0, 1000, 1000]
+    ]
+  },
+  "Bed with Bedding": {
+    "bounding_boxes": [
+      [280, 20, 720, 630]
+    ]
+  },
+  "Nightstands with Lamps": {
+    "bounding_boxes": [
+      [130, 30, 260, 190],
+      [740, 30, 870, 190]
+    ]
+  },
+  "Floor Potted Plant": {
+    "bounding_boxes": [
+      [30, 850, 180, 980]
+    ]
+  },
+  "Full-Length Mirror": {
+    "bounding_boxes": [
+      [650, 910, 820, 990]
+    ]
+  }
+}</textarea>
+            <button id="render-bbox-btn">Render Bounding Boxes</button>
+        </div>
+
+        <div class="control-group">
+            <h4>Object List</h4>
+            <div id="bbox-list" style="display: flex; flex-direction: column; gap: 5px;"></div>
+        </div>
+
+        <div class="control-group">
+            <h4>Camera</h4>
+            <button id="toggle-camera-btn">Switch to Free Camera</button>
+        </div>
+
+        <div class="control-group">
+            <h4>Debug</h4>
+            <button id="inspector-btn">Open Inspector</button>
+        </div>
+
+        <div class="control-group">
+            <h4>Shadows</h4>
+            <label><input type="checkbox" id="toggle-shadows" checked> Enable Shadows</label>
+        </div>
+
+        <div class="control-group">
+            <h4>Upload GLB</h4>
+            <input type="file" id="glb-file-input" accept=".glb,.gltf" multiple>
+        </div>
+
+        <div class="control-group">
+            <h4>Base Room Model</h4>
+            <div class="input-row">
+                <label>Pos X: <input type="number" id="room-pos-x" value="0" step="0.1"></label>
+                <label>Pos Y: <input type="number" id="room-pos-y" value="0.5" step="0.1"></label>
+                <label>Pos Z: <input type="number" id="room-pos-z" value="0" step="0.1"></label>
+            </div>
+            <div class="input-row">
+                <label>Scale X: <input type="number" id="room-scale-x" value="8" step="0.1"></label>
+                <label>Scale Y: <input type="number" id="room-scale-y" value="5" step="0.1"></label>
+                <label>Scale Z: <input type="number" id="room-scale-z" value="8" step="0.1"></label>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="renderCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById("renderCanvas");
+        const engine = new BABYLON.Engine(canvas, true);
+        let scene;
+        let roomMesh = null;
+        let testBox = null;
+        let bboxRoot = null;
+        let debugBoxRoot = null;
+        let placedGLBs = []; // Track placed GLB wrappers
+        let arcCamera = null;
+        let freeCamera = null;
+        let gizmoManager = null;
+        let shadowGenerator = null;
+        let cameraSettings = {
+            speed: 0.1,
+            limit: 2.5,
+            height: 1
+        };
+
+        const createScene = function () {
+            const scene = new BABYLON.Scene(engine);
+
+            // Camera
+            arcCamera = new BABYLON.ArcRotateCamera("camera", -Math.PI / 2, Math.PI / 2.5, 15, new BABYLON.Vector3(0, 0, 0), scene);
+            arcCamera.attachControl(canvas, true);
+            arcCamera.wheelPrecision = 50;
+            arcCamera.minZ = 0.01;
+            arcCamera.maxZ = 50;
+
+            freeCamera = new BABYLON.FreeCamera("freeCamera", new BABYLON.Vector3(0, cameraSettings.height, -10), scene);
+            freeCamera.keysUp.push(87);    // W
+            freeCamera.keysDown.push(83);  // S
+            freeCamera.keysLeft.push(65);  // A
+            freeCamera.keysRight.push(68); // D
+            freeCamera.minZ = 0.01;
+            freeCamera.maxZ = 50;
+            freeCamera.speed = cameraSettings.speed;
+
+            // Gizmo Manager
+            gizmoManager = new BABYLON.GizmoManager(scene);
+            gizmoManager.positionGizmoEnabled = true;
+            gizmoManager.rotationGizmoEnabled = false;
+            gizmoManager.scaleGizmoEnabled = false;
+            gizmoManager.boundingBoxGizmoEnabled = false;
+            // Only enable Y-plane drag (XZ plane movement)
+            gizmoManager.gizmos.positionGizmo.xGizmo.isEnabled = true;
+            gizmoManager.gizmos.positionGizmo.yGizmo.isEnabled = true;
+            gizmoManager.gizmos.positionGizmo.zGizmo.isEnabled = true;
+            gizmoManager.gizmos.positionGizmo.xPlaneGizmo.isEnabled = false;
+            gizmoManager.gizmos.positionGizmo.yPlaneGizmo.isEnabled = false; // Drag on XZ plane
+            gizmoManager.gizmos.positionGizmo.zPlaneGizmo.isEnabled = false;
+            
+            gizmoManager.attachableMeshes = []; 
+
+            // SSAO Post-Processing
+            var ssao = new BABYLON.SSAO2RenderingPipeline("ssao", scene, { ssaoRatio: 0.5, blurRatio: 0.5 }, null, false);
+            ssao.radius = 15.5;
+            ssao.totalStrength = 1;
+            ssao.expensiveBlur = false;
+            ssao.samples = 48;
+            scene.prePassRenderer.samples = 16;
+            scene.postProcessRenderPipelineManager.attachCamerasToRenderPipeline("ssao", arcCamera);
+            scene.postProcessRenderPipelineManager.attachCamerasToRenderPipeline("ssao", freeCamera);
+
+            // Gizmo Attachment: attach to the GLB wrapper when clicking any of its children
+            scene.onPointerObservable.add((pointerInfo) => {
+                if (pointerInfo.type === BABYLON.PointerEventTypes.POINTERDOWN) {
+                    const pick = pointerInfo.pickInfo;
+                    if (pick && pick.hit && pick.pickedMesh) {
+                        console.log("Picked mesh:", pick.pickedMesh.name);
+                        const findWrapper = (mesh) => {
+                            let curr = mesh;
+                            while (curr) {
+                                if (curr.metadata) {
+                                    if (curr.metadata.isGLBWrapper) return curr;
+                                    if (curr.metadata.wrapper) return curr.metadata.wrapper;
+                                }
+                                curr = curr.parent;
+                            }
+                            return null;
+                        };
+                        const wrapper = findWrapper(pick.pickedMesh);
+                        if (wrapper) {
+                            console.log("Attaching gizmo to wrapper:", wrapper.name);
+                            gizmoManager.attachToMesh(wrapper);
+                            // Constrain rotation to Y only when a wrapper is attached
+                            console.log(gizmoManager.gizmos);
+                            if (gizmoManager.gizmos.rotationGizmo) {
+                                gizmoManager.gizmos.rotationGizmo.xGizmo = false;
+                                gizmoManager.gizmos.rotationGizmo.yGizmo = true;
+                                gizmoManager.gizmos.rotationGizmo.zGizmo = false;
+                            }
+                        } else {
+                            console.log("No GLB wrapper found in parent chain");
+                            // Detach gizmo so nothing shows when clicking non-wrapper meshes
+                            gizmoManager.attachToMesh(null);
+                        }
+                    }
+                }
+            });
+
+            // Lighting
+            const hemisphericLight = new BABYLON.HemisphericLight("hemiLight", new BABYLON.Vector3(0, 1, 0), scene);
+            hemisphericLight.intensity = 0.5;
+
+            const dirLight = new BABYLON.DirectionalLight("dirLight", new BABYLON.Vector3(0.44, -0.62, -0.64), scene);
+            dirLight.position = new BABYLON.Vector3(20, 40, 20);
+            dirLight.intensity = 2.5;
+            dirLight.autoCalcShadowZBounds = true;
+            
+            // Shadows
+            shadowGenerator = new BABYLON.ShadowGenerator(1024, dirLight);
+            shadowGenerator.usePercentageCloserFiltering = true;
+            shadowGenerator.filteringQuality = BABYLON.ShadowGenerator.QUALITY_HIGH;
+            shadowGenerator.filter = 5;
+            // shadowGenerator.bias = 0.001; // Optional tweak
+
+            // Environment
+            const envTexture = new BABYLON.CubeTexture.CreateFromPrefilteredData("environment.env", scene);
+            // const envTexture = new BABYLON.EXRCubeTexture("DayEnvironmentHDRI101_1K_HDR.exr", scene, 512, false, true, false, true);
+            scene.environmentTexture = envTexture;
+            scene.iblIntensity = 0.75;
+            scene.createDefaultSkybox(envTexture, true, 500);
+
+            // Shadows toggle UI
+            const toggleShadows = document.getElementById('toggle-shadows');
+            const applyShadowSettings = () => {
+                const enabled = toggleShadows.checked;
+                if (enabled) {
+                    dirLight.intensity = 2.5;
+                    scene.iblIntensity = 0.75;
+                } else {
+                    dirLight.intensity = 0;
+                    scene.iblIntensity = 1.75;
+                }
+            };
+            toggleShadows.addEventListener('change', applyShadowSettings);
+            applyShadowSettings();
+
+            // --- Base Room Model ---
+            BABYLON.SceneLoader.ImportMesh("", "./", "base-room-opt.glb", scene, function (meshes) {
+                if (meshes.length > 0) {
+                    roomMesh = meshes[0];
+                    console.log("Room loaded");
+                    updateRoomTransform();
+                    
+                    // Add shadows
+                    meshes.forEach(m => {
+                        shadowGenerator.addShadowCaster(m);
+                        m.receiveShadows = true;
+                    });
+                }
+            }, null, function (scene, message, exception) {
+                console.warn("Could not load base-room-opt.glb", message, exception);
+            });
+
+            // --- Test Box ---
+            testBox = BABYLON.MeshBuilder.CreateBox("testBox", {size: 1}, scene);
+            testBox.scaling = new BABYLON.Vector3(1, 0.05, 1);
+            testBox.position.y = -1.35;
+            const testBoxMat = new BABYLON.StandardMaterial("testBoxMat", scene);
+            testBoxMat.diffuseColor = new BABYLON.Color3(0, 1, 0);
+            testBox.material = testBoxMat;
+            testBox.receiveShadows = true;
+            shadowGenerator.addShadowCaster(testBox);
+
+            // --- dat.GUI ---
+            const gui = new dat.GUI();
+            
+            const boxFolder = gui.addFolder('Test Box');
+            boxFolder.add(testBox.position, 'x').name('Pos X');
+            boxFolder.add(testBox.position, 'y').name('Pos Y');
+            boxFolder.add(testBox.position, 'z').name('Pos Z');
+            boxFolder.add(testBox.scaling, 'x').name('Scale X');
+            boxFolder.add(testBox.scaling, 'y').name('Scale Y');
+            boxFolder.add(testBox.scaling, 'z').name('Scale Z');
+            // boxFolder.open();
+
+            const camFolder = gui.addFolder('Free Camera');
+            camFolder.add(cameraSettings, 'speed', 0.1, 5.0).name('Speed').onChange(v => {
+                if (freeCamera) freeCamera.speed = v;
+            });
+            camFolder.add(cameraSettings, 'limit', 1, 20).name('Move Limit');
+            camFolder.add(cameraSettings, 'height', 0.1, 10).name('Height');
+            camFolder.open();
+
+            return scene;
+        };
+
+        scene = createScene();
+
+        // --- UI Event Listeners for Room ---
+        const roomInputs = {
+            posX: document.getElementById('room-pos-x'),
+            posY: document.getElementById('room-pos-y'),
+            posZ: document.getElementById('room-pos-z'),
+            scaleX: document.getElementById('room-scale-x'),
+            scaleY: document.getElementById('room-scale-y'),
+            scaleZ: document.getElementById('room-scale-z'),
+        };
+
+        function updateRoomTransform() {
+            if (!roomMesh) return;
+            roomMesh.position.x = parseFloat(roomInputs.posX.value) || 0;
+            roomMesh.position.y = parseFloat(roomInputs.posY.value) || 0;
+            roomMesh.position.z = parseFloat(roomInputs.posZ.value) || 0;
+            roomMesh.scaling.x = parseFloat(roomInputs.scaleX.value) || 5;
+            roomMesh.scaling.y = parseFloat(roomInputs.scaleY.value) || 5;
+            roomMesh.scaling.z = parseFloat(roomInputs.scaleZ.value) || 5;
+        }
+
+        Object.values(roomInputs).forEach(input => {
+            input.addEventListener('input', updateRoomTransform);
+        });
+
+        // --- Camera Toggler ---
+        document.getElementById('toggle-camera-btn').addEventListener('click', function() {
+            if (scene.activeCamera === arcCamera) {
+                scene.activeCamera.detachControl(canvas);
+                freeCamera.position = arcCamera.position.clone();
+                freeCamera.setTarget(BABYLON.Vector3.Zero());
+                scene.activeCamera = freeCamera;
+                scene.activeCamera.attachControl(canvas, true);
+                this.textContent = "Switch to Arc Camera";
+            } else {
+                scene.activeCamera.detachControl(canvas);
+                scene.activeCamera = arcCamera;
+                scene.activeCamera.attachControl(canvas, true);
+                this.textContent = "Switch to Free Camera";
+            }
+        });
+
+        // --- Inspector ---
+        document.getElementById('inspector-btn').addEventListener('click', function() {
+            if (scene.debugLayer.isVisible()) {
+                scene.debugLayer.hide();
+            } else {
+                scene.debugLayer.show({
+                    embedMode: true,
+                });
+            }
+        });
+
+        // --- GLB Uploader ---
+        document.getElementById('glb-file-input').addEventListener('change', function(evt) {
+            const files = evt.target.files;
+            if (!files || files.length === 0) return;
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const blobUrl = URL.createObjectURL(file);
+                BABYLON.SceneLoader.ImportMesh("", "", blobUrl, scene, function(meshes) {
+                    console.log("Loaded " + file.name);
+                    if (meshes.length > 0) {
+                        const root = meshes[0];
+                        
+                        // Wrap in bounding box mesh to handle picking and gizmo attachment better
+                        // This creates a box that wraps the mesh and makes the original mesh not pickable
+                        const wrapper = BABYLON.BoundingBoxGizmo.MakeNotPickableAndWrapInBoundingBox(root);
+                        
+                        // Add the wrapper to gizmo manager
+                        gizmoManager.attachableMeshes.push(wrapper);
+                        
+                        // Ensure shadows work for the children
+                        root.getChildMeshes(false).forEach(m => {
+                            if (shadowGenerator) {
+                                shadowGenerator.addShadowCaster(m);
+                                m.receiveShadows = true;
+                            }
+                        });
+                    }
+                }, null, function(scene, message, exception) {
+                    console.error("Error loading " + file.name, message, exception);
+                }, ".glb");
+            }
+        });
+
+        // --- Free Camera Constraints ---
+        scene.onBeforeRenderObservable.add(() => {
+            if (scene.activeCamera === freeCamera) {
+                // Fix Y
+                freeCamera.position.y = cameraSettings.height;
+                
+                // Clamp X and Z
+                const limit = cameraSettings.limit;
+                if (freeCamera.position.x > limit) freeCamera.position.x = limit;
+                if (freeCamera.position.x < -limit) freeCamera.position.x = -limit;
+                if (freeCamera.position.z > limit) freeCamera.position.z = limit;
+                if (freeCamera.position.z < -limit) freeCamera.position.z = -limit;
+            }
+        });
+
+        // --- Bounding Box Rendering Logic ---
+        document.getElementById('render-bbox-btn').addEventListener('click', renderBoundingBoxes);
+        
+        // Listen for checkbox change to toggle visibility
+        document.getElementById('bbox-show-debug').addEventListener('change', function(e) {
+            if (debugBoxRoot) {
+                debugBoxRoot.setEnabled(e.target.checked);
+            }
+        });
+        
+        // Listen for bbox config changes to re-render
+        document.getElementById('bbox-platform-y').addEventListener('change', renderBoundingBoxes);
+        document.getElementById('bbox-world-size').addEventListener('change', renderBoundingBoxes);
+        
+        // Listen for GLB placement settings to update all placed GLBs
+        document.getElementById('glb-scale-mult').addEventListener('change', updateAllPlacedGLBs);
+        document.getElementById('glb-y-offset').addEventListener('change', updateAllPlacedGLBs);
+
+        function renderBoundingBoxes() {
+            const jsonStr = document.getElementById('bbox-input').value;
+            let data;
+            try {
+                data = JSON.parse(jsonStr);
+            } catch (e) {
+                alert("Invalid JSON");
+                return;
+            }
+
+            // Cleanup previous
+            if (bboxRoot) {
+                bboxRoot.dispose();
+            }
+
+            // Cleanup UI
+            const listContainer = document.getElementById('bbox-list');
+            if (listContainer) {
+                listContainer.innerHTML = '';
+            }
+
+            bboxRoot = new BABYLON.TransformNode("bboxRoot", scene);
+            debugBoxRoot = new BABYLON.TransformNode("debugBoxRoot", scene);
+            debugBoxRoot.parent = bboxRoot;
+            
+            // Apply initial visibility
+            debugBoxRoot.setEnabled(document.getElementById('bbox-show-debug').checked);
+            
+            // Config
+            const platformY = parseFloat(document.getElementById('bbox-platform-y').value) || -1;
+            const worldSize = parseFloat(document.getElementById('bbox-world-size').value) || 6.5;
+            const platformThickness = 0.25;
+
+            const platform = BABYLON.MeshBuilder.CreateBox("platform", {
+                width: worldSize,
+                depth: worldSize,
+                height: platformThickness
+            }, scene);
+            platform.position.y = platformY;
+            platform.parent = debugBoxRoot; // Platform is part of debug visualization
+
+            const platformMat = new BABYLON.StandardMaterial("platformMat", scene);
+            platformMat.diffuseColor = new BABYLON.Color3(0.8, 0.8, 0.8);
+            platform.material = platformMat;
+
+            // Render Boxes
+            const mapSize = 1000;
+            const scaleFactor = worldSize / mapSize;
+            const offset = worldSize / 2;
+
+            const boxHeight = 3;
+            // Boxes sit ON the platform.
+            // Platform top is at platformY + platformThickness/2
+            // Box center Y = PlatformTop + boxHeight/2
+            const boxCenterY = platformY + (platformThickness / 2) + (boxHeight / 2);
+
+            const colors = [
+                new BABYLON.Color3(1, 0, 0),
+                new BABYLON.Color3(0, 1, 0),
+                new BABYLON.Color3(0, 0, 1),
+                new BABYLON.Color3(1, 1, 0),
+                new BABYLON.Color3(0, 1, 1),
+                new BABYLON.Color3(1, 0, 1),
+                new BABYLON.Color3(1, 0.5, 0)
+            ];
+            let colorIdx = 0;
+
+            for (const key in data) {
+                const item = data[key];
+                if (item.bounding_boxes) {
+                    const color = colors[colorIdx % colors.length];
+                    const mat = new BABYLON.StandardMaterial("mat_" + key, scene);
+                    mat.diffuseColor = color;
+                    mat.alpha = 0.6;
+                    colorIdx++;
+
+                    item.bounding_boxes.forEach((bbox, index) => {
+                        // bbox: [minX, minZ, maxX, maxZ]
+                        const [minX, minZ, maxX, maxZ] = bbox;
+                        
+                        const w = (maxX - minX) * scaleFactor;
+                        const d = (maxZ - minZ) * scaleFactor;
+                        
+                        const centerX = ((minX + maxX) / 2) * scaleFactor - offset;
+                        // Invert Z: 0 maps to offset, 1000 maps to -offset
+                        // Z_world = offset - (Z_input * scaleFactor)
+                        // Wait, let's check orientation.
+                        // If 0,0 is top-left.
+                        // CenterZ_input = (minZ + maxZ) / 2
+                        // CenterZ_world = offset - (CenterZ_input * scaleFactor)
+                        // But wait, width/depth are absolute.
+                        
+                        // Let's try non-inverted first: 0->-4, 1000->4
+                        // const centerZ = ((minZ + maxZ) / 2) * scaleFactor - offset;
+                        
+                        // Let's try inverted Z (standard image to 3D plane mapping usually flips Y/Z)
+                        // Image (0,0) top-left -> 3D (-4, 4)
+                        // Image (1000, 1000) bottom-right -> 3D (4, -4)
+                        const centerZ = offset - ((minZ + maxZ) / 2) * scaleFactor;
+
+                        const box = BABYLON.MeshBuilder.CreateBox(key, {
+                            width: w,
+                            depth: d,
+                            height: boxHeight
+                        }, scene);
+
+                        box.position.x = centerX;
+                        box.position.z = centerZ;
+                        box.position.y = boxCenterY;
+                        box.material = mat;
+                        box.parent = debugBoxRoot; // Parent to debugBoxRoot
+                        
+                        // UI Element
+                        if (listContainer) {
+                            const itemDiv = document.createElement('div');
+                            itemDiv.style.border = "1px solid #ccc";
+                            itemDiv.style.padding = "5px";
+                            itemDiv.style.marginBottom = "5px";
+                            itemDiv.style.backgroundColor = "#f9f9f9";
+                            
+                            const label = document.createElement('div');
+                            label.textContent = key + (item.bounding_boxes.length > 1 ? ` (${index + 1})` : "");
+                            label.style.fontWeight = "bold";
+                            label.style.fontSize = "12px";
+                            label.style.marginBottom = "3px";
+                            itemDiv.appendChild(label);
+                            
+                            const fileInput = document.createElement('input');
+                            fileInput.type = "file";
+                            fileInput.accept = ".glb,.gltf";
+                            fileInput.style.width = "100%";
+                            fileInput.addEventListener('change', (e) => {
+                                handleGlbUploadForBBox(e.target.files[0], bbox, key, index);
+                            });
+                            itemDiv.appendChild(fileInput);
+                            
+                            listContainer.appendChild(itemDiv);
+                        }
+                    });
+                }
+            }
+        }
+
+        function handleGlbUploadForBBox(file, bbox, key, index) {
+            if (!file) return;
+            const blobUrl = URL.createObjectURL(file);
+            
+            BABYLON.SceneLoader.ImportMesh("", "", blobUrl, scene, function(meshes) {
+                if (meshes.length === 0) return;
+                
+                const root = meshes[0];
+                
+                // Constants (must match renderBoundingBoxes)
+                const platformY = parseFloat(document.getElementById('bbox-platform-y').value) || 0;
+                const worldSize = parseFloat(document.getElementById('bbox-world-size').value) || 8;
+                const mapSize = 1000;
+                const scaleFactor = worldSize / mapSize;
+                const offset = worldSize / 2;
+                const platformThickness = 0.25;
+                const boxHeight = 3;
+                
+                // Target Dimensions & Position
+                const [minX, minZ, maxX, maxZ] = bbox;
+                const targetWidth = (maxX - minX) * scaleFactor;
+                const targetDepth = (maxZ - minZ) * scaleFactor;
+                const targetHeight = boxHeight;
+                
+                const centerX = ((minX + maxX) / 2) * scaleFactor - offset;
+                const centerZ = offset - ((minZ + maxZ) / 2) * scaleFactor;
+                
+                // Target Bottom Y (Top of platform)
+                const targetBottomY = platformY + (platformThickness / 2);
+
+                // Normalize Mesh
+                root.position = BABYLON.Vector3.Zero();
+                root.rotation = BABYLON.Vector3.Zero();
+                root.scaling = BABYLON.Vector3.One();
+                // Ensure children and root are pickable, and link wrapper via metadata later
+                root.isPickable = true;
+                root.getChildMeshes(false).forEach(child => { child.isPickable = true; });
+                
+                // Get Bounds & Center
+                const bounds = root.getHierarchyBoundingVectors();
+                const size = bounds.max.subtract(bounds.min);
+                const center = bounds.max.add(bounds.min).scale(0.5);
+                
+                // Create Wrapper
+                // Wrapper is placed at the bottom center of the target box
+                const wrapper = new BABYLON.TransformNode("wrap_" + key + "_" + index, scene);
+                wrapper.position = new BABYLON.Vector3(centerX, targetBottomY, centerZ);
+                wrapper.parent = bboxRoot; // Parent to bboxRoot (not debugBoxRoot)
+                wrapper.metadata = { isGLBWrapper: true };
+                
+                root.parent = wrapper;
+                // Link root and all children back to wrapper for easy lookup
+                root.metadata = root.metadata || {};
+                root.metadata.wrapper = wrapper;
+                root.getChildMeshes(false).forEach(child => {
+                    child.metadata = child.metadata || {};
+                    child.metadata.wrapper = wrapper;
+                });
+                
+                // Rotation Logic
+                const isTargetXLong = targetWidth >= targetDepth;
+                const isMeshXLong = size.x >= size.z;
+                
+                if (isTargetXLong !== isMeshXLong) {
+                    wrapper.rotation.y = Math.PI / 2;
+                }
+                
+                // Scaling Logic
+                let effWidth = size.x;
+                let effDepth = size.z;
+                if (isTargetXLong !== isMeshXLong) {
+                    effWidth = size.z;
+                    effDepth = size.x;
+                }
+                
+                const sX = targetWidth / effWidth;
+                const sZ = targetDepth / effDepth;
+                const sY = targetHeight / size.y;
+                
+                const baseScale = Math.min(sX, sZ, sY);
+                const scaleMultiplier = parseFloat(document.getElementById('glb-scale-mult').value) || 1;
+                const finalScale = baseScale * scaleMultiplier;
+                wrapper.scaling = new BABYLON.Vector3(finalScale, finalScale, finalScale);
+
+                // Position Adjustment for Bottom Alignment
+                // We want the bottom of the mesh (min.y) to be at wrapper's origin (0,0,0)
+                // root.position = -center is NOT correct for Y if we want bottom alignment.
+                // We want: root.position.y = -bounds.min.y
+                // For X and Z, we still want center alignment.
+                
+                root.position.x = -center.x;
+                root.position.z = -center.z;
+                root.position.y = -bounds.min.y;
+                
+                // Apply Y Offset
+                const yOffset = parseFloat(document.getElementById('glb-y-offset').value) || 0;
+                wrapper.position.y += yOffset;
+
+                // Store metadata for later updates
+                wrapper.metadata = {
+                    bbox: bbox,
+                    key: key,
+                    index: index,
+                    baseScale: baseScale,
+                    bounds: bounds,
+                    center: center
+                };
+                
+                // Track this wrapper
+                placedGLBs.push(wrapper);
+
+                // Create a stable, pickable helper mesh for gizmo attachment
+                // Keep hierarchy stable and attach gizmo by traversing to wrapper
+                const pickHelper = BABYLON.MeshBuilder.CreateBox("pick_" + key + "_" + index, {
+                    width: targetWidth,
+                    height: 0.01,
+                    depth: targetDepth
+                }, scene);
+                pickHelper.visibility = 0; // invisible but pickable
+                pickHelper.isPickable = true;
+                pickHelper.position = new BABYLON.Vector3(0, 0, 0);
+                pickHelper.parent = wrapper; // follows wrapper transform exactly
+                // Also add to attachableMeshes for built-in click support
+                gizmoManager.attachableMeshes.push(pickHelper);
+
+                // Shadows
+                root.getChildMeshes(false).forEach(m => {
+                    if (shadowGenerator) {
+                        shadowGenerator.addShadowCaster(m);
+                        m.receiveShadows = true;
+                    }
+                });
+                
+                console.log(`Placed ${key} at ${centerX.toFixed(2)}, ${centerZ.toFixed(2)} with scale ${finalScale.toFixed(4)}`);
+                
+            }, null, function(scene, message, exception) {
+                console.error("Error loading " + file.name, message, exception);
+            }, ".glb");
+        }
+        
+        function updateAllPlacedGLBs() {
+            const scaleMultiplier = parseFloat(document.getElementById('glb-scale-mult').value) || 1;
+            const yOffset = parseFloat(document.getElementById('glb-y-offset').value) || 0;
+            const platformY = parseFloat(document.getElementById('bbox-platform-y').value) || 0;
+            const platformThickness = 0.25;
+            const targetBottomY = platformY + (platformThickness / 2);
+            
+            placedGLBs.forEach(wrapper => {
+                if (wrapper.metadata) {
+                    const { bbox, baseScale } = wrapper.metadata;
+                    const worldSize = parseFloat(document.getElementById('bbox-world-size').value) || 8;
+                    const mapSize = 1000;
+                    const scaleFactor = worldSize / mapSize;
+                    const offset = worldSize / 2;
+                    
+                    const [minX, minZ, maxX, maxZ] = bbox;
+                    const centerX = ((minX + maxX) / 2) * scaleFactor - offset;
+                    const centerZ = offset - ((minZ + maxZ) / 2) * scaleFactor;
+                    
+                    // Update position
+                    wrapper.position.x = centerX;
+                    wrapper.position.y = targetBottomY + yOffset;
+                    wrapper.position.z = centerZ;
+                    
+                    // Update scale - apply multiplier AFTER base scale
+                    const finalScale = baseScale * scaleMultiplier;
+                    wrapper.scaling = new BABYLON.Vector3(finalScale, finalScale, finalScale);
+                }
+            });
+        }
+
+        // Initial render
+        renderBoundingBoxes();
+
+        engine.runRenderLoop(function () {
+            scene.render();
+        });
+
+        window.addEventListener("resize", function () {
+            engine.resize();
+        });
+    </script>
+</body>
+</html>

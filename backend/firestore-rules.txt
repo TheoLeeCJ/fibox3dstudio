@@ -1,0 +1,35 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default: deny all access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      // Users can read their own document
+      allow read: if request.auth != null && request.auth.uid == userId;
+      
+      // Users can create their own document on first sign-in with default quotas
+      allow create: if request.auth != null 
+                    && request.auth.uid == userId
+                    && request.resource.data.imagesQuota == 200
+                    && request.resource.data.modelsQuota == 100
+                    && request.resource.data.imagesUsed == 0
+                    && request.resource.data.modelsUsed == 0;
+      
+      // Users cannot directly write quota fields (only backend can)
+      // But they can update non-quota fields
+      allow update: if request.auth != null 
+                    && request.auth.uid == userId
+                    && !request.resource.data.diff(resource.data).affectedKeys()
+                        .hasAny(['imagesQuota', 'modelsQuota', 'imagesUsed', 'modelsUsed']);
+      
+      // User's projects subcollection
+      match /projects/{projectId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+  }
+}
