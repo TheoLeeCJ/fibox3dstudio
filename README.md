@@ -1,6 +1,10 @@
 ![](https://i.imgur.com/VAmsvDQ.png)
 # Watch the video: https://www.youtube.com/watch?v=tTuT6ZODGsA
 
+## Sample FIBO Outputs
+
+![](https://imgur.com/2W9Supk)
+
 ## Inspiration
 While traditional AI image generation is helpful for brainstorming, it is sometimes a bottleneck for actual production. You can prompt a room and get a stunning image, but the moment you need to move a chair or shift the lighting, you’re stuck. Change one word, and the entire room hallucinates into something else. Change a camera angle, but try as you might, the model does not understand.
 
